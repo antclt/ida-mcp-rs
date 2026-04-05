@@ -12,84 +12,46 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-linux:
+  build:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: x86_64
+          - os: linux
+            arch: x86_64
             runner: ubuntu-24.04
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-        with:
-          submodules: true
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7  # stable
-
-      - name: Build
-        env:
-          IDADIR: /opt/idapro-9.3
-          # Enable verbose C++ compiler output
-          CC_ENABLE_DEBUG_OUTPUT: "1"
-        run: cargo build --release --locked -vv
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
-        with:
-          name: ida-mcp-linux-${{ matrix.arch }}
-          path: target/release/ida-mcp
-
-  build-macos:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x86_64
+            idadir: /opt/idapro-9.3
+            artifact_name: ida-mcp-linux-x86_64
+            artifact_path: target/release/ida-mcp
+          - os: macos
+            arch: x86_64
             runner: macos-15-intel
-          - arch: arm64
+            idadir: /Applications/IDA Professional 9.3.app/Contents/MacOS
+            artifact_name: ida-mcp-macos-x86_64
+            artifact_path: target/release/ida-mcp
+          - os: macos
+            arch: arm64
             runner: macos-15
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-        with:
-          submodules: true
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7  # stable
-
-      - name: Build
-        env:
-          IDADIR: /Applications/IDA Professional 9.3.app/Contents/MacOS
-        run: cargo build --release --locked
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
-        with:
-          name: ida-mcp-macos-${{ matrix.arch }}
-          path: target/release/ida-mcp
-
-  build-windows:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x86_64
+            idadir: /Applications/IDA Professional 9.3.app/Contents/MacOS
+            artifact_name: ida-mcp-macos-arm64
+            artifact_path: target/release/ida-mcp
+          - os: windows
+            arch: x86_64
             runner: windows-2025
-          - arch: arm64
-            runner: windows-11-arm
+            idadir: C:\Program Files\IDA Professional 9.3
+            artifact_name: ida-mcp-windows-x86_64
+            artifact_path: target/release/ida-mcp.exe
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Install LLVM
+        if: matrix.os == 'windows'
         uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0  # v2
         with:
           version: "20"
           directory: "${{ runner.temp }}/llvm-20"
 
       - name: Configure LLVM environment
+        if: matrix.os == 'windows'
         run: echo "LIBCLANG_PATH=$((gcm clang).source -replace "clang.exe")" >> $env:GITHUB_ENV
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -99,19 +61,27 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7  # stable
 
-      - name: Build
+      - name: Build Linux
+        if: matrix.os == 'linux'
         env:
-          IDADIR: C:\Program Files\IDA Professional 9.3
+          IDADIR: ${{ matrix.idadir }}
+          CC_ENABLE_DEBUG_OUTPUT: "1"
+        run: cargo build --release --locked -vv
+
+      - name: Build Non-Linux
+        if: matrix.os != 'linux'
+        env:
+          IDADIR: ${{ matrix.idadir }}
         run: cargo build --release --locked
 
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
-          name: ida-mcp-windows-${{ matrix.arch }}
-          path: target/release/ida-mcp.exe
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_path }}
 
   release:
-    needs: [build-linux, build-macos, build-windows]
+    needs: [build]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:

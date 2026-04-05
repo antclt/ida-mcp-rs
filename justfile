@@ -35,7 +35,8 @@ update-beta-cask ida_version="9.4":
     just --justfile "{{ justfile_directory() }}/ci.just" publish-beta-cask "$VERSION" "{{ ida_version }}"
 
 # Update homebrew stable cask in tap (run after GitHub release is created).
-# Supports macOS (arm64, x86_64) and Linux (x86_64, arm64).
+
+# Supports macOS (arm64, x86_64) and Linux (x86_64).
 update-cask revision="":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -45,6 +46,7 @@ update-cask revision="":
 
 # Update homebrew versioned cask for a specific IDA version.
 # Usage: just update-versioned-cask 9.2
+
 # Resolves the latest release tag for that IDA line automatically.
 update-versioned-cask ida_version release_version="":
     #!/usr/bin/env bash
@@ -61,6 +63,7 @@ update-versioned-cask ida_version release_version="":
     just --justfile "{{ justfile_directory() }}/ci.just" publish-versioned-cask "$VERSION" "{{ ida_version }}"
 
 # CI helper wrappers. The implementation lives in ci.just so workflow shell logic
+
 # stays centralized and easier to audit.
 ci-package-artifacts:
     just --justfile "{{ justfile_directory() }}/ci.just" package-artifacts
@@ -69,6 +72,7 @@ ci-generate-checksums:
     just --justfile "{{ justfile_directory() }}/ci.just" generate-checksums
 
 # Local post-release publishing. These use your local `gh` auth and the live
+
 # GitHub release assets/checksums rather than CI secrets or ephemeral artifacts.
 release-fetch-checksums version="":
     #!/usr/bin/env bash

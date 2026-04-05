@@ -28,7 +28,7 @@ Override with `IDADIR`:
 IDADIR='/Applications/IDA Home 9.3.app/Contents/MacOS' cargo build --release
 ```
 
-### Linux (x86_64 / ARM64)
+### Linux (x86_64)
 
 ```bash
 # Install dependencies (Ubuntu/Debian)
@@ -49,7 +49,7 @@ Common Linux IDA paths:
 - `/home/<user>/idapro-9.3`
 - `/usr/local/idapro-9.3`
 
-### Windows (x86_64 / ARM64)
+### Windows (x86_64)
 
 ```powershell
 # Install LLVM (required for bindgen)

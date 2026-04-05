@@ -2,7 +2,7 @@
 
 Headless IDA Pro MCP server for AI-powered reverse engineering.
 
-Release archives are published for `x86_64` and `arm64` on macOS, Linux, and Windows.
+Release archives are published for `x86_64` and `arm64` on macOS, plus `x86_64` on Linux and Windows.
 
 ## Prerequisites
 

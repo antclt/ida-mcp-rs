@@ -25,11 +25,9 @@ package-artifacts:
     }
 
     package_tar ida-mcp-linux-x86_64 "ida-mcp_${VERSION}_Linux_x86_64.tar.gz"
-    package_tar ida-mcp-linux-arm64 "ida-mcp_${VERSION}_Linux_arm64.tar.gz"
     package_tar ida-mcp-macos-x86_64 "ida-mcp_${VERSION}_Darwin_x86_64.tar.gz"
     package_tar ida-mcp-macos-arm64 "ida-mcp_${VERSION}_Darwin_arm64.tar.gz"
     package_zip ida-mcp-windows-x86_64 "ida-mcp_${VERSION}_Windows_x86_64.zip"
-    package_zip ida-mcp-windows-arm64 "ida-mcp_${VERSION}_Windows_arm64.zip"
 
 generate-checksums:
     #!/usr/bin/env bash
@@ -61,8 +59,6 @@ publish-scoop version:
 
     hash_for() { grep "$1" "${CHECKSUMS_FILE}" | awk '{print $1}'; }
     WIN_X86_64_HASH=$(hash_for "Windows_x86_64.zip")
-    WIN_ARM64_HASH=$(hash_for "Windows_arm64.zip")
-
     cat > "${WORKDIR}/ida-mcp.json" <<EOF
     {
       "version": "${VERSION}",
@@ -71,11 +67,6 @@ publish-scoop version:
           "url": "https://github.com/blacktop/ida-mcp-rs/releases/download/v${VERSION}/ida-mcp_${VERSION}_Windows_x86_64.zip",
           "bin": ["ida-mcp.exe"],
           "hash": "${WIN_X86_64_HASH}"
-        },
-        "arm64": {
-          "url": "https://github.com/blacktop/ida-mcp-rs/releases/download/v${VERSION}/ida-mcp_${VERSION}_Windows_arm64.zip",
-          "bin": ["ida-mcp.exe"],
-          "hash": "${WIN_ARM64_HASH}"
         }
       },
       "homepage": "https://github.com/blacktop/ida-mcp-rs",
@@ -112,7 +103,6 @@ publish-nur version:
     }
 
     LINUX_X86_64_SRI=$(nix_sri "$(hash_for "Linux_x86_64.tar.gz")")
-    LINUX_ARM64_SRI=$(nix_sri "$(hash_for "Linux_arm64.tar.gz")")
     DARWIN_X86_64_SRI=$(nix_sri "$(hash_for "Darwin_x86_64.tar.gz")")
     DARWIN_ARM64_SRI=$(nix_sri "$(hash_for "Darwin_arm64.tar.gz")")
 
@@ -129,10 +119,6 @@ publish-nur version:
           url = "https://github.com/blacktop/ida-mcp-rs/releases/download/vVERSION_PLACEHOLDER/ida-mcp_VERSION_PLACEHOLDER_Linux_x86_64.tar.gz";
           hash = "LINUX_X86_64_HASH_PLACEHOLDER";
         };
-        aarch64-linux = {
-          url = "https://github.com/blacktop/ida-mcp-rs/releases/download/vVERSION_PLACEHOLDER/ida-mcp_VERSION_PLACEHOLDER_Linux_arm64.tar.gz";
-          hash = "LINUX_ARM64_HASH_PLACEHOLDER";
-        };
         x86_64-darwin = {
           url = "https://github.com/blacktop/ida-mcp-rs/releases/download/vVERSION_PLACEHOLDER/ida-mcp_VERSION_PLACEHOLDER_Darwin_x86_64.tar.gz";
           hash = "DARWIN_X86_64_HASH_PLACEHOLDER";
@@ -142,7 +128,7 @@ publish-nur version:
           hash = "DARWIN_ARM64_HASH_PLACEHOLDER";
         };
       };
-      platform = supported.${system};
+      platform = supported.${system} or (throw "ida-mcp: unsupported system ${system}");
     in
     stdenvNoCC.mkDerivation {
       pname = "ida-mcp";
@@ -169,7 +155,6 @@ publish-nur version:
     sed -i \
         -e "s|VERSION_PLACEHOLDER|${VERSION}|g" \
         -e "s|LINUX_X86_64_HASH_PLACEHOLDER|${LINUX_X86_64_SRI}|g" \
-        -e "s|LINUX_ARM64_HASH_PLACEHOLDER|${LINUX_ARM64_SRI}|g" \
         -e "s|DARWIN_X86_64_HASH_PLACEHOLDER|${DARWIN_X86_64_SRI}|g" \
         -e "s|DARWIN_ARM64_HASH_PLACEHOLDER|${DARWIN_ARM64_SRI}|g" \
         "${WORKDIR}/ida-mcp-default.nix"
@@ -203,8 +188,6 @@ publish-winget version:
 
     hash_for() { grep "$1" "${CHECKSUMS_FILE}" | awk '{print $1}'; }
     WIN_X86_64_HASH_UPPER=$(hash_for "Windows_x86_64.zip" | tr '[:lower:]' '[:upper:]')
-    WIN_ARM64_HASH_UPPER=$(hash_for "Windows_arm64.zip" | tr '[:lower:]' '[:upper:]')
-
     MANIFEST_DIR="${WORKDIR}/manifests/b/blacktop/ida-mcp/${VERSION}"
     BRANCH="ida-mcp-${VERSION}"
 
@@ -233,9 +216,6 @@ publish-winget version:
       - Architecture: x64
         InstallerUrl: https://github.com/blacktop/ida-mcp-rs/releases/download/v${VERSION}/ida-mcp_${VERSION}_Windows_x86_64.zip
         InstallerSha256: ${WIN_X86_64_HASH_UPPER}
-      - Architecture: arm64
-        InstallerUrl: https://github.com/blacktop/ida-mcp-rs/releases/download/v${VERSION}/ida-mcp_${VERSION}_Windows_arm64.zip
-        InstallerSha256: ${WIN_ARM64_HASH_UPPER}
     ManifestType: installer
     ManifestVersion: 1.6.0
     EOF
@@ -301,7 +281,7 @@ publish-winget version:
         - [x] Manifest: blacktop.ida-mcp
         - [x] Version: ${VERSION}
         - [x] InstallerType: zip (portable)
-        - [x] Architectures: x64, arm64
+        - [x] Architectures: x64
 
         Created automatically by [ida-mcp release automation](https://github.com/blacktop/ida-mcp-rs)."
     fi
@@ -330,7 +310,6 @@ publish-cask version revision="":
     DARWIN_ARM64_SHA=$(hash_for "Darwin_arm64.tar.gz")
     DARWIN_X86_64_SHA=$(hash_for "Darwin_x86_64.tar.gz")
     LINUX_X86_64_SHA=$(hash_for "Linux_x86_64.tar.gz")
-    LINUX_ARM64_SHA=$(hash_for "Linux_arm64.tar.gz")
 
     BASE_RELEASE_URL="https://github.com/blacktop/ida-mcp-rs/releases/download/v${URL_VERSION}"
 
@@ -344,8 +323,7 @@ publish-cask version revision="":
       version "${CASK_VERSION}"
       sha256 arm:          "${DARWIN_ARM64_SHA}",
              intel:        "${DARWIN_X86_64_SHA}",
-             x86_64_linux: "${LINUX_X86_64_SHA}",
-             arm64_linux:  "${LINUX_ARM64_SHA}"
+             x86_64_linux: "${LINUX_X86_64_SHA}"
 
       url "${BASE_RELEASE_URL}/ida-mcp_${URL_VERSION}_#{os}_#{arch}.tar.gz"
       name "ida-mcp"
