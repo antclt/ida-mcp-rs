@@ -87,9 +87,10 @@ pub mod tool_registry;
 
 pub use error::ToolError;
 pub use ida::{
-    run_ida_loop, AddressInfo, BasicBlockInfo, BytesResult, DbInfo, ExportInfo, FunctionInfo,
-    FunctionListResult, FunctionRangeInfo, IdaRequest, IdaWorker, ImportInfo, SegmentInfo,
-    StringInfo, StringListResult, StringXrefInfo, StringXrefsResult, SymbolInfo, XRefInfo,
+    init_ida_library, run_ida_loop, AddressInfo, BasicBlockInfo, BytesResult, DbInfo, ExportInfo,
+    FunctionInfo, FunctionListResult, FunctionRangeInfo, IdaInitState, IdaRequest, IdaWorker,
+    ImportInfo, SegmentInfo, StringInfo, StringListResult, StringXrefInfo, StringXrefsResult,
+    SymbolInfo, XRefInfo,
 };
 pub use server::{IdaMcpServer, ServerMode};
 pub use tool_registry::{ToolCategory, ToolInfo, TOOL_REGISTRY};

@@ -12,7 +12,7 @@ pub mod request;
 pub mod types;
 pub mod worker;
 
-pub use loop_impl::run_ida_loop;
+pub use loop_impl::{init_ida_library, run_ida_loop, IdaInitState};
 pub use request::IdaRequest;
 pub use types::*;
 pub use worker::IdaWorker;

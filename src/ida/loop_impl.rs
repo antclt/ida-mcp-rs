@@ -30,23 +30,71 @@ macro_rules! log_result {
     };
 }
 
+pub struct IdaInitState {
+    pub library_initialized: bool,
+    pub version_mismatch: Option<String>,
+}
+
+impl IdaInitState {
+    pub fn deferred() -> Self {
+        Self {
+            library_initialized: false,
+            version_mismatch: None,
+        }
+    }
+}
+
+/// Check the IDA runtime version against the SDK we compiled with.
+///
+/// Returns a mismatch message when the major versions differ.
+fn check_ida_version() -> Option<String> {
+    let (sdk_major, sdk_minor) = idalib::SDK_VERSION;
+    match idalib::version() {
+        Ok(v) => {
+            info!("IDA runtime version: {v} (compiled for SDK {sdk_major}.{sdk_minor})");
+            check_version_mismatch(sdk_major, v.major())
+        }
+        Err(e) => {
+            warn!("Could not query IDA runtime version: {e}");
+            None
+        }
+    }
+}
+
+/// Initialize IDA on the main thread **before** the MCP transport starts.
+///
+/// On Windows stdio mode this must run before `rmcp::stdio()` captures
+/// stdin, because `init_library()` may probe console handles during
+/// startup — if stdin is already owned by the MCP framing layer the
+/// process deadlocks.
+pub fn init_ida_library() -> IdaInitState {
+    info!("Initializing IDA library on main thread (eager)");
+    idalib::init_library();
+    idalib::enable_console_messages(false);
+
+    let version_mismatch = check_ida_version();
+    if let Some(ref msg) = version_mismatch {
+        error!("{msg}");
+    }
+
+    IdaInitState {
+        library_initialized: true,
+        version_mismatch,
+    }
+}
+
 /// Run the IDA worker loop on the current (main) thread.
 /// This function blocks until Shutdown is received.
-///
-/// IDA library initialization is deferred until the first request
-/// that needs it. This allows `open_dsc` to run `idat` without
-/// license contention (idat needs its own license).
-pub fn run_ida_loop(rx: mpsc::Receiver<IdaRequest>) {
+pub fn run_ida_loop(rx: mpsc::Receiver<IdaRequest>, init_state: IdaInitState) {
     let mut idb: Option<IDB> = None;
     let mut lock_file: Option<File> = None;
     let mut lock_path: Option<PathBuf> = None;
-    let mut lib_initialized = false;
-
-    let mut version_mismatch: Option<String> = None;
+    let mut lib_initialized = init_state.library_initialized;
+    let mut version_mismatch = init_state.version_mismatch;
 
     while let Ok(req) = rx.recv() {
-        // Lazily initialize the IDA library on first use.
-        // Must happen on the main thread (which this loop runs on).
+        // Lazily initialize the IDA library on first use when startup preflight
+        // intentionally deferred initialization (non-Windows or HTTP mode).
         if !lib_initialized {
             if let Err(err) = ensure_not_cancelled(req.cancel_token()) {
                 reject_with_error(req, err);
@@ -62,25 +110,12 @@ pub fn run_ida_loop(rx: mpsc::Receiver<IdaRequest>) {
                 "Initializing IDA runtime on the main thread",
             );
             idalib::init_library();
+            idalib::enable_console_messages(false);
             lib_initialized = true;
 
-            // Check runtime IDA major version against the SDK we compiled
-            // with. Only the major version is compared because IDA's
-            // get_library_version() returns the product version (e.g.
-            // 9.0.260213) whose minor field does NOT match the SDK minor
-            // version (e.g. IDA_SDK_VERSION=930 → 9.3). See issue #9.
-            let (sdk_major, _sdk_minor) = idalib::SDK_VERSION;
-            match idalib::version() {
-                Ok(v) => {
-                    info!("IDA runtime version: {v} (compiled for SDK {sdk_major}.{_sdk_minor})");
-                    if let Some(msg) = check_version_mismatch(sdk_major, v.major()) {
-                        error!("{msg}");
-                        version_mismatch = Some(msg);
-                    }
-                }
-                Err(e) => {
-                    warn!("Could not query IDA runtime version: {e}");
-                }
+            if let Some(msg) = check_ida_version() {
+                error!("{msg}");
+                version_mismatch = Some(msg);
             }
         }
 
