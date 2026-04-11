@@ -36,7 +36,7 @@ update-beta-cask ida_version="9.4":
 
 # Update homebrew stable cask in tap (run after GitHub release is created).
 
-# Supports macOS (arm64, x86_64) and Linux (x86_64).
+# Supports macOS (arm64, x86_64) and Linux (arm64, x86_64).
 update-cask revision="":
     #!/usr/bin/env bash
     set -euo pipefail

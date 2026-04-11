@@ -25,6 +25,7 @@ package-artifacts:
     }
 
     package_tar ida-mcp-linux-x86_64 "ida-mcp_${VERSION}_Linux_x86_64.tar.gz"
+    package_tar ida-mcp-linux-arm64 "ida-mcp_${VERSION}_Linux_arm64.tar.gz"
     package_tar ida-mcp-macos-x86_64 "ida-mcp_${VERSION}_Darwin_x86_64.tar.gz"
     package_tar ida-mcp-macos-arm64 "ida-mcp_${VERSION}_Darwin_arm64.tar.gz"
     package_zip ida-mcp-windows-x86_64 "ida-mcp_${VERSION}_Windows_x86_64.zip"
@@ -84,14 +85,29 @@ publish-nur version:
     gh auth status >/dev/null
     GH_AUTH_TOKEN="$(gh auth token)"
 
-    hash_for() { grep "$1" "${CHECKSUMS_FILE}" | awk '{print $1}'; }
+    lookup_hash() { awk -v a="$1" 'substr($2, length($2)-length(a)+1) == a { print $1; exit }' "${CHECKSUMS_FILE}"; }
+    required_hash_for() {
+        local hash
+        hash=$(lookup_hash "$1")
+        [[ -n "${hash}" ]] || {
+            echo "Missing checksum for $1 in ${CHECKSUMS_FILE}" >&2
+            exit 1
+        }
+        printf '%s' "${hash}"
+    }
+    optional_hash_for() { lookup_hash "$1"; }
     nix_sri() {
         echo -n "sha256-$(echo "$1" | xxd -r -p | base64 | tr -d '\n')"
     }
 
-    LINUX_X86_64_SRI=$(nix_sri "$(hash_for "Linux_x86_64.tar.gz")")
-    DARWIN_X86_64_SRI=$(nix_sri "$(hash_for "Darwin_x86_64.tar.gz")")
-    DARWIN_ARM64_SRI=$(nix_sri "$(hash_for "Darwin_arm64.tar.gz")")
+    LINUX_X86_64_SRI=$(nix_sri "$(required_hash_for "Linux_x86_64.tar.gz")")
+    DARWIN_X86_64_SRI=$(nix_sri "$(required_hash_for "Darwin_x86_64.tar.gz")")
+    DARWIN_ARM64_SRI=$(nix_sri "$(required_hash_for "Darwin_arm64.tar.gz")")
+    # arm64-linux asset first ships in v9.3.10; older releases lack it
+    LINUX_ARM64_HASH=$(optional_hash_for "Linux_arm64.tar.gz")
+    if [[ -n "${LINUX_ARM64_HASH}" ]]; then
+        LINUX_ARM64_SRI=$(nix_sri "${LINUX_ARM64_HASH}")
+    fi
 
     cat > "${WORKDIR}/ida-mcp-default.nix" <<'NIXEOF'
     {
@@ -105,6 +121,10 @@ publish-nur version:
         x86_64-linux = {
           url = "https://github.com/blacktop/ida-mcp-rs/releases/download/vVERSION_PLACEHOLDER/ida-mcp_VERSION_PLACEHOLDER_Linux_x86_64.tar.gz";
           hash = "LINUX_X86_64_HASH_PLACEHOLDER";
+        };
+        aarch64-linux = {
+          url = "https://github.com/blacktop/ida-mcp-rs/releases/download/vVERSION_PLACEHOLDER/ida-mcp_VERSION_PLACEHOLDER_Linux_arm64.tar.gz";
+          hash = "LINUX_ARM64_HASH_PLACEHOLDER";
         };
         x86_64-darwin = {
           url = "https://github.com/blacktop/ida-mcp-rs/releases/download/vVERSION_PLACEHOLDER/ida-mcp_VERSION_PLACEHOLDER_Darwin_x86_64.tar.gz";
@@ -139,6 +159,13 @@ publish-nur version:
     }
     NIXEOF
 
+    if [[ -n "${LINUX_ARM64_HASH}" ]]; then
+        sed -i.bak "s|LINUX_ARM64_HASH_PLACEHOLDER|${LINUX_ARM64_SRI}|g" \
+            "${WORKDIR}/ida-mcp-default.nix"
+    else
+        # Drop the aarch64-linux entry so meta.platforms stays accurate
+        sed -i.bak '/aarch64-linux = {/,/};/d' "${WORKDIR}/ida-mcp-default.nix"
+    fi
     sed -i.bak \
         -e "s|VERSION_PLACEHOLDER|${VERSION}|g" \
         -e "s|LINUX_X86_64_HASH_PLACEHOLDER|${LINUX_X86_64_SRI}|g" \
@@ -308,12 +335,33 @@ publish-cask version revision="":
         URL_VERSION='#{version}'
     fi
 
-    hash_for() { grep "$1" "${CHECKSUMS_FILE}" | awk '{print $1}'; }
-    DARWIN_ARM64_SHA=$(hash_for "Darwin_arm64.tar.gz")
-    DARWIN_X86_64_SHA=$(hash_for "Darwin_x86_64.tar.gz")
-    LINUX_X86_64_SHA=$(hash_for "Linux_x86_64.tar.gz")
+    lookup_hash() { awk -v a="$1" 'substr($2, length($2)-length(a)+1) == a { print $1; exit }' "${CHECKSUMS_FILE}"; }
+    required_hash_for() {
+        local hash
+        hash=$(lookup_hash "$1")
+        [[ -n "${hash}" ]] || {
+            echo "Missing checksum for $1 in ${CHECKSUMS_FILE}" >&2
+            exit 1
+        }
+        printf '%s' "${hash}"
+    }
+    optional_hash_for() { lookup_hash "$1"; }
+    DARWIN_ARM64_SHA=$(required_hash_for "Darwin_arm64.tar.gz")
+    DARWIN_X86_64_SHA=$(required_hash_for "Darwin_x86_64.tar.gz")
+    LINUX_X86_64_SHA=$(required_hash_for "Linux_x86_64.tar.gz")
+    # arm64-linux asset first ships in v9.3.10; older releases lack it
+    LINUX_ARM64_SHA=$(optional_hash_for "Linux_arm64.tar.gz")
 
     BASE_RELEASE_URL="https://github.com/blacktop/ida-mcp-rs/releases/download/v${URL_VERSION}"
+
+    SHA256_LINES="sha256 arm:          \"${DARWIN_ARM64_SHA}\",
+             intel:        \"${DARWIN_X86_64_SHA}\","
+    if [[ -n "${LINUX_ARM64_SHA}" ]]; then
+        SHA256_LINES="${SHA256_LINES}
+             arm64_linux:  \"${LINUX_ARM64_SHA}\","
+    fi
+    SHA256_LINES="${SHA256_LINES}
+             x86_64_linux: \"${LINUX_X86_64_SHA}\""
 
     CASK_FILE="${WORKDIR}/ida-mcp.rb"
     cat > "${CASK_FILE}" << CASK
@@ -323,9 +371,7 @@ publish-cask version revision="":
       os macos: "Darwin", linux: "Linux"
 
       version "${CASK_VERSION}"
-      sha256 arm:          "${DARWIN_ARM64_SHA}",
-             intel:        "${DARWIN_X86_64_SHA}",
-             x86_64_linux: "${LINUX_X86_64_SHA}"
+      ${SHA256_LINES}
 
       url "${BASE_RELEASE_URL}/ida-mcp_${URL_VERSION}_#{os}_#{arch}.tar.gz"
       name "ida-mcp"
