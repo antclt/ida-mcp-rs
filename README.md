@@ -44,9 +44,10 @@ nix shell github:blacktop/nur#ida-mcp \
 
 **Linux** (via [Snap](https://snapcraft.io/ida-mcp))
 ```bash
-snap install ida-mcp
+sudo snap install ida-mcp
+sudo snap connect ida-mcp:dot-idapro   # grant access to ~/.idapro (license)
 ```
-> Strict confinement with `home` interface. Requires IDA Pro installed under `$HOME` (the installer default `~/ida-pro-9.3` works). For IDA in `/opt/` or system paths, use Homebrew or Nix instead.
+> Strict confinement. Requires IDA Pro installed under `$HOME` (installer default `~/ida-pro-9.3`). For IDA in `/opt/` or system paths, use Homebrew or Nix.
 
 **Direct download** — grab the archive for your platform from [GitHub Releases](https://github.com/blacktop/ida-mcp-rs/releases).
 

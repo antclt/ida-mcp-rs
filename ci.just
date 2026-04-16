@@ -48,6 +48,11 @@ package-artifacts:
             '    export LD_LIBRARY_PATH="${ida_dir}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"' \
             'fi' \
             '' \
+            '# Snap strict confinement remaps $HOME; point IDA at the real .idapro' \
+            'if [ -n "${SNAP_REAL_HOME:-}" ]; then' \
+            '    export IDAUSR="${SNAP_REAL_HOME}/.idapro"' \
+            'fi' \
+            '' \
             'exec "${bin_dir}/ida-mcp-bin" "$@"' \
             > "${package_dir}/ida-mcp"
         chmod +x "${package_dir}/ida-mcp"
