@@ -32,7 +32,9 @@ trap cleanup EXIT INT TERM
 "$BIN" serve-http --bind "127.0.0.1:$PORT" --allow-origin "http://localhost,http://127.0.0.1" >"$server_log" 2>&1 &
 server_pid=$!
 
-init_payload='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"0.1"},"capabilities":{}}}'
+proto_version="${MCP_PROTOCOL_VERSION:-2024-11-05}"
+echo "   protocolVersion=${proto_version}"
+init_payload=$(printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"%s","clientInfo":{"name":"test","version":"0.1"},"capabilities":{}}}' "$proto_version")
 
 session_id=""
 for _ in {1..100}; do

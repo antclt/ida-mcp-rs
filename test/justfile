@@ -100,7 +100,16 @@ test-http: fixture
         fi
     fi
     echo "🧪 Running HTTP integration test..."
-    RUST_LOG="{{ rust_log }}" IDB_PATH="{{ test_bin }}" MCP_HTTP_BIN="{{ server_bin }}" ./http_integration.sh
+    port_base=$((8765 + RANDOM % 1000))
+    i=0
+    for proto in 2024-11-05 2025-11-25; do
+        echo "── MCP protocol ${proto} ──"
+        RUST_LOG="{{ rust_log }}" IDB_PATH="{{ test_bin }}" \
+            MCP_HTTP_BIN="{{ server_bin }}" MCP_PROTOCOL_VERSION="${proto}" \
+            PORT=$((port_base + i)) \
+            ./http_integration.sh
+        i=$((i + 1))
+    done
     echo "✅ HTTP test passed"
 
 # Run IDAPython script integration test
