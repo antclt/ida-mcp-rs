@@ -94,6 +94,16 @@ struct DscBackgroundCtx {
     frameworks: Vec<String>,
 }
 
+/// Inputs above this size automatically route `open_idb(auto_analyse=true)`
+/// to the background analysis path (asking the user via MCP elicitation when the
+/// client supports it). 50 MiB chosen empirically — kernelcaches and DSCs are
+/// typically larger than this and benefit from background analysis; smaller
+/// binaries usually finish auto-analysis well within the foreground timeout.
+const OPEN_IDB_AUTO_BACKGROUND_THRESHOLD_BYTES: u64 = 50 * 1024 * 1024;
+/// Bound the MCP elicitation prompt separately from IDA work. If the client
+/// leaves the prompt unanswered, default to background analysis.
+const OPEN_IDB_ELICITATION_TIMEOUT_SECS: u64 = 30;
+
 enum ForegroundOperationError {
     Tool(ToolError),
     TimedOut {
@@ -762,6 +772,11 @@ impl IdaMcpServer {
         check analysis_status in the response. If auto_is_ok is false and you need xrefs/decompile, \
         call analyze_funcs(background=true) and poll task_status. list_functions, disasm, strings, \
         and get_bytes work immediately without full analysis. \
+        When auto_analyse=true and the raw input exceeds 50 MiB, the server may prompt the user via MCP \
+        elicitation (or auto-route silently when elicitation is unavailable or unanswered) and run \
+        auto-analysis as a background task; the response then includes analysis_background=true, \
+        analysis_task_id, analysis_task_status, and analysis_background_reason — poll \
+        task_status(analysis_task_id) for completion. \
         The database stays open until close_idb is called, so you can make multiple \
         queries without reopening."
     )]
@@ -772,27 +787,46 @@ impl IdaMcpServer {
         Parameters(req): Parameters<OpenIdbRequest>,
     ) -> Result<CallToolResult, McpError> {
         debug!("Tool call: open_idb");
+        let path = req.path.trim().to_string();
         // Validate path (prevent directory traversal, check extension)
-        if !Self::validate_path(&req.path) {
-            return Ok(ToolError::InvalidPath(req.path).to_tool_result());
+        if !Self::validate_path(&path) {
+            return Ok(ToolError::InvalidPath(path).to_tool_result());
         }
+
+        let user_auto_analyse = req.auto_analyse.unwrap_or(false);
+        let large_input_size = if user_auto_analyse && !Self::is_database_path(&path) {
+            Self::input_size_above_threshold(&path)
+        } else {
+            None
+        };
+        let route_to_background = match large_input_size {
+            Some(size) => {
+                self.choose_open_idb_background(&ctx, &path, size, req.timeout_secs)
+                    .await
+            }
+            None => false,
+        };
+        // Open the database with auto_analyse disabled when we plan to spawn
+        // analysis as a background task; the open call itself stays fast and
+        // analysis runs without the foreground timeout cap.
+        let effective_auto_analyse = user_auto_analyse && !route_to_background;
 
         match self
             .run_foreground_operation(
                 &ctx,
                 "open_idb",
-                req.path.clone(),
+                path.clone(),
                 req.timeout_secs,
                 300,
                 |progress_tx, cancel| {
                     self.worker.open_observed(
-                        &req.path,
+                        &path,
                         req.load_debug_info.unwrap_or(false),
                         req.debug_info_path.clone(),
                         req.debug_info_verbose.unwrap_or(false),
                         req.force.unwrap_or(false),
                         req.file_type.clone(),
-                        req.auto_analyse.unwrap_or(false),
+                        effective_auto_analyse,
                         Vec::new(),
                         Some(progress_tx),
                         Some(cancel),
@@ -804,6 +838,14 @@ impl IdaMcpServer {
             Ok(info) => {
                 let close_token = if matches!(self.mode, ServerMode::Http) {
                     self.worker.issue_close_token()
+                } else {
+                    None
+                };
+                let analysis_task = if route_to_background && !info.analysis_status.auto_is_ok {
+                    Some(match self.spawn_analyze_funcs_task() {
+                        Ok(task_id) => (task_id, "started"),
+                        Err(existing_id) => (existing_id, "already_running"),
+                    })
                 } else {
                     None
                 };
@@ -834,6 +876,16 @@ impl IdaMcpServer {
                     if let Some(token) = close_token {
                         map.insert("close_token".to_string(), json!(token));
                     }
+                    if let Some((task_id, status)) = analysis_task {
+                        let reason = format!(
+                            "Input size exceeded {} MiB; auto-analysis routed to a background task. Poll task_status(task_id) for progress.",
+                            OPEN_IDB_AUTO_BACKGROUND_THRESHOLD_BYTES / (1024 * 1024)
+                        );
+                        map.insert("analysis_background".to_string(), json!(true));
+                        map.insert("analysis_task_id".to_string(), json!(task_id));
+                        map.insert("analysis_task_status".to_string(), json!(status));
+                        map.insert("analysis_background_reason".to_string(), json!(reason));
+                    }
                 }
                 Ok(CallToolResult::success(vec![Content::text(
                     serde_json::to_string_pretty(&value).unwrap_or_else(|_| format!("{value:?}")),
@@ -854,6 +906,118 @@ impl IdaMcpServer {
             )
             .to_tool_result()),
             Err(ForegroundOperationError::Tool(error)) => Ok(error.to_tool_result()),
+        }
+    }
+
+    /// Returns the input size in bytes when it strictly exceeds the
+    /// auto-background threshold; `None` otherwise (including when the path
+    /// can't be stat'd, e.g. for raw arguments that aren't real files).
+    fn input_size_above_threshold(path: &str) -> Option<u64> {
+        let meta = std::fs::metadata(crate::expand_path(path.trim())).ok()?;
+        if !meta.is_file() {
+            return None;
+        }
+        let size = meta.len();
+        (size > OPEN_IDB_AUTO_BACKGROUND_THRESHOLD_BYTES).then_some(size)
+    }
+
+    fn is_database_path(path: &str) -> bool {
+        crate::expand_path(path.trim())
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| {
+                let ext = ext.to_ascii_lowercase();
+                ext == "i64" || ext == "idb" || ext == "id0"
+            })
+            .unwrap_or(false)
+    }
+
+    fn open_idb_elicitation_timeout_secs(request_timeout_secs: Option<u64>) -> u64 {
+        request_timeout_secs
+            .unwrap_or(OPEN_IDB_ELICITATION_TIMEOUT_SECS)
+            .min(MAX_TIMEOUT_SECS)
+            .min(OPEN_IDB_ELICITATION_TIMEOUT_SECS)
+    }
+
+    /// Decide whether `open_idb` should route auto-analysis to a background
+    /// task. Asks the user via MCP elicitation when the client advertises the
+    /// capability; falls back to "background" silently otherwise so large
+    /// binaries don't get killed by the foreground timeout. Unanswered prompts
+    /// time out to "background"; explicit decline/cancel from a capable client
+    /// preserves the legacy foreground behavior.
+    async fn choose_open_idb_background(
+        &self,
+        ctx: &RequestContext<RoleServer>,
+        path: &str,
+        size_bytes: u64,
+        request_timeout_secs: Option<u64>,
+    ) -> bool {
+        use rmcp::service::{ElicitationError, ServiceError};
+
+        let size_mib = size_bytes / (1024 * 1024);
+        let threshold_mib = OPEN_IDB_AUTO_BACKGROUND_THRESHOLD_BYTES / (1024 * 1024);
+
+        if ctx.peer.supported_elicitation_modes().is_empty() {
+            info!(
+                path,
+                size_mib, "client lacks elicitation; routing open_idb auto-analysis to background"
+            );
+            return true;
+        }
+
+        let prompt = format!(
+            "'{path}' is {size_mib} MiB (threshold {threshold_mib} MiB). \
+            Run auto-analysis as a background task with no timeout? \
+            Choosing 'no' runs it inline (capped at the foreground timeout)."
+        );
+
+        let elicitation_timeout_secs =
+            Self::open_idb_elicitation_timeout_secs(request_timeout_secs);
+        let client_cancel = ctx.ct.clone();
+        let elicitation = ctx.peer.elicit_with_timeout::<OpenIdbBackgroundChoice>(
+            prompt,
+            Some(Duration::from_secs(elicitation_timeout_secs)),
+        );
+
+        let result = tokio::select! {
+            biased;
+            _ = client_cancel.cancelled() => {
+                info!(
+                    path,
+                    size_mib,
+                    "open_idb elicitation cancelled with client request"
+                );
+                return false;
+            }
+            result = elicitation => result,
+        };
+
+        match result {
+            Ok(Some(choice)) => choice.background.unwrap_or(true),
+            // Some clients return Accept with no content for action-only
+            // confirmations; treat that as a "yes, background".
+            // `Ok(None)` is not expected from rmcp 1.5 here, but keep the arm
+            // defensive in case the typed API broadens in a future release.
+            Ok(None) | Err(ElicitationError::NoContent) => true,
+            Err(ElicitationError::UserDeclined | ElicitationError::UserCancelled) => false,
+            Err(ElicitationError::CapabilityNotSupported) => true,
+            Err(ElicitationError::Service(ServiceError::Timeout { .. })) => {
+                info!(
+                    path,
+                    size_mib,
+                    elicitation_timeout_secs,
+                    "open_idb elicitation timed out; routing auto-analysis to background"
+                );
+                true
+            }
+            Err(err) => {
+                warn!(
+                    path,
+                    size_mib, elicitation_timeout_secs, %err,
+                    "open_idb elicitation failed; routing to background to avoid timeout regression"
+                );
+                true
+            }
         }
     }
 
@@ -2748,23 +2912,32 @@ impl IdaMcpServer {
     /// worker thread), so a fixed dedup key returns the existing task_id if one
     /// is already in flight.
     fn analyze_funcs_background(&self) -> CallToolResult {
-        let task_id = match self.task_registry.create_keyed(
+        let payload = match self.spawn_analyze_funcs_task() {
+            Ok(task_id) => json!({
+                "status": "started",
+                "task_id": task_id,
+                "message": "Auto-analysis started in background. Poll task_status(task_id) for progress. Other tool calls will block until the IDA worker thread is free.",
+            }),
+            Err(existing_id) => json!({
+                "status": "already_running",
+                "task_id": existing_id,
+                "message": "Auto-analysis is already running. Poll task_status(task_id) for progress.",
+            }),
+        };
+        CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&payload).unwrap_or_default(),
+        )])
+    }
+
+    /// Create the background auto-analysis task and spawn its worker future.
+    /// Returns `Ok(task_id)` on success, `Err(existing_task_id)` if one is
+    /// already in flight (deduplicated by the fixed key).
+    fn spawn_analyze_funcs_task(&self) -> Result<String, String> {
+        let task_id = self.task_registry.create_keyed(
             "analyze",
             "analyze_funcs",
             "Waiting for IDA auto-analysis to finish",
-        ) {
-            Ok(id) => id,
-            Err(existing_id) => {
-                return CallToolResult::success(vec![Content::text(
-                    serde_json::to_string_pretty(&json!({
-                        "status": "already_running",
-                        "task_id": existing_id,
-                        "message": "Auto-analysis is already running. Poll task_status(task_id) for progress.",
-                    }))
-                    .unwrap_or_default(),
-                )]);
-            }
-        };
+        )?;
 
         info!(task_id = %task_id, "Spawning background auto-analysis");
 
@@ -2797,15 +2970,7 @@ impl IdaMcpServer {
             }
         });
         self.task_registry.set_handle(&task_id, handle);
-
-        CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&json!({
-                "status": "started",
-                "task_id": task_id,
-                "message": "Auto-analysis started in background. Poll task_status(task_id) for progress. Other tool calls will block until the IDA worker thread is free.",
-            }))
-            .unwrap_or_default(),
-        )])
+        Ok(task_id)
     }
 
     #[tool(description = "Rename symbols")]
@@ -4031,6 +4196,56 @@ mod tests {
         assert!(message.contains("detail"));
     }
 
+    #[test]
+    fn input_size_above_threshold_is_strictly_greater_than_threshold() {
+        let threshold = crate::server::OPEN_IDB_AUTO_BACKGROUND_THRESHOLD_BYTES;
+        let exact_path =
+            create_sparse_test_file("exact-threshold", threshold).expect("create exact file");
+        let above_path =
+            create_sparse_test_file("above-threshold", threshold + 1).expect("create above file");
+
+        assert_eq!(
+            IdaMcpServer::input_size_above_threshold(
+                exact_path.to_str().expect("exact path should be UTF-8")
+            ),
+            None
+        );
+
+        let above_path_text = above_path.to_str().expect("above path should be UTF-8");
+        assert_eq!(
+            IdaMcpServer::input_size_above_threshold(&format!(" {above_path_text} ")),
+            Some(threshold + 1)
+        );
+
+        let _ = std::fs::remove_file(exact_path);
+        let _ = std::fs::remove_file(above_path);
+    }
+
+    #[test]
+    fn is_database_path_matches_existing_ida_database_extensions() {
+        assert!(IdaMcpServer::is_database_path(" /tmp/sample.I64 "));
+        assert!(IdaMcpServer::is_database_path("/tmp/sample.idb"));
+        assert!(IdaMcpServer::is_database_path("/tmp/sample.id0"));
+        assert!(!IdaMcpServer::is_database_path("/tmp/sample.macho"));
+        assert!(!IdaMcpServer::is_database_path("/tmp/sample"));
+    }
+
+    #[test]
+    fn open_idb_elicitation_timeout_is_bounded_by_prompt_and_request_timeouts() {
+        assert_eq!(
+            IdaMcpServer::open_idb_elicitation_timeout_secs(None),
+            crate::server::OPEN_IDB_ELICITATION_TIMEOUT_SECS
+        );
+        assert_eq!(
+            IdaMcpServer::open_idb_elicitation_timeout_secs(Some(10)),
+            10
+        );
+        assert_eq!(
+            IdaMcpServer::open_idb_elicitation_timeout_secs(Some(600)),
+            crate::server::OPEN_IDB_ELICITATION_TIMEOUT_SECS
+        );
+    }
+
     #[tokio::test]
     async fn recent_operations_tool_reports_queued_active_operation() {
         let server = test_server();
@@ -4119,5 +4334,12 @@ mod tests {
             .map(|t| t.text.as_str())
             .unwrap_or_default();
         assert!(wrapped_text.contains("\"content\""));
+    }
+
+    fn create_sparse_test_file(name: &str, len: u64) -> std::io::Result<std::path::PathBuf> {
+        let path = std::env::temp_dir().join(format!("ida-mcp-{name}-{}", uuid::Uuid::new_v4()));
+        let file = std::fs::File::create(&path)?;
+        file.set_len(len)?;
+        Ok(path)
     }
 }

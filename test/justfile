@@ -182,6 +182,23 @@ test-observability: test-bootstrap
     RUST_LOG="{{ rust_log }}" MCP_HTTP_BIN="{{ server_bin }}" IDB_PATH="{{ test_bin }}" bash ./http_observability.sh
     echo "✅ Observability test passed"
 
+# Run open_idb auto-background elicitation integration test
+test-elicitation: fixture
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -x "{{ server_bin }}" ]; then
+        echo "Server binary not found: {{ server_bin }}"
+        echo "Run 'cargo build --release' first"
+        exit 1
+    fi
+    if ! command -v jq &>/dev/null; then
+        echo "jq is required for elicitation test (brew install jq)"
+        exit 1
+    fi
+    echo "🧪 Running elicitation auto-background integration test..."
+    RUST_LOG="{{ rust_log }}" MCP_STDIO_BIN="{{ server_bin }}" bash ./stdio_elicitation.sh
+    echo "✅ Elicitation test passed"
+
 # Run crash-guard integration test
 # Verifies that SIGSEGV during a handler call is caught and converted to a
 # ToolError instead of killing the server. Triggers a real segfault via

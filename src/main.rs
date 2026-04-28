@@ -184,7 +184,7 @@ fn run_server() -> anyhow::Result<()> {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .expect("Failed to create tokio runtime");
+            .map_err(|e| anyhow::anyhow!("failed to create tokio runtime: {e}"))?;
 
         rt.block_on(async move {
             info!("MCP server listening on stdio");
@@ -239,8 +239,10 @@ fn run_server() -> anyhow::Result<()> {
     info!("IDA worker loop finished");
 
     // Wait for server thread to finish
-    if let Err(e) = server_handle.join() {
-        error!("Server thread panicked: {:?}", e);
+    match server_handle.join() {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => error!("Server thread failed: {e}"),
+        Err(e) => error!("Server thread panicked: {:?}", e),
     }
 
     info!("Server stopped");

@@ -6,6 +6,7 @@
 just test         # Stdio JSONL integration test
 just test-http    # HTTP/SSE integration test
 just test-script  # IDAPython script execution test
+just test-elicitation # open_idb auto-background elicitation test
 just test-dsc /path/to/dyld_shared_cache_arm64e  # DSC loading test
 just cargo-test   # Unit tests (no IDA required)
 ```
@@ -33,6 +34,11 @@ All integration tests require IDA Pro with a valid license. Run `cargo build` fi
 - Verifies stdout/stderr capture
 - Verifies Python error reporting (division by zero)
 - Verifies file-based script execution (`.py` file path)
+
+**Elicitation test** (`just test-elicitation`)
+- Creates a sparse Mach-O fixture just over 50 MiB
+- Verifies `open_idb(auto_analyse=true)` silently routes analysis to a background task when the client has no elicitation capability
+- Verifies an elicitation-capable client receives `elicitation/create`, accepts it, and gets `analysis_background=true` plus a pollable `analysis_task_id`
 
 **DSC test** (`just test-dsc <path>`)
 - Requires a real `dyld_shared_cache_arm64e` file

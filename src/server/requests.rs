@@ -38,12 +38,29 @@ pub struct OpenIdbRequest {
         For raw binaries, false returns quickly with the database loaded but analysis incomplete. \
         Check analysis_status in the response — if auto_is_ok is false and you need xrefs/decompile, \
         call analyze_funcs(background=true) and poll task_status. \
-        For .i64/.idb files this has no effect (analysis is already in the database)."
+        For .i64/.idb files this has no effect (analysis is already in the database). \
+        Note: when set to true and the raw input exceeds 50 MiB, the server may prompt the user (via MCP \
+        elicitation) or silently route auto-analysis to a background task when elicitation is unavailable \
+        or unanswered; in that case the response returns immediately with analysis_task_id rather than \
+        blocking until analysis finishes."
     )]
     pub auto_analyse: Option<bool>,
     #[schemars(description = "Open timeout in seconds (default: 300, max: 600)")]
     pub timeout_secs: Option<u64>,
 }
+
+/// Schema for the elicitation prompt used by `open_idb` when the input binary
+/// exceeds the auto-background threshold.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct OpenIdbBackgroundChoice {
+    #[schemars(
+        description = "Run auto-analysis as a background task with no timeout. \
+        Choose 'no' to run inline (capped by the foreground timeout)."
+    )]
+    pub background: Option<bool>,
+}
+
+rmcp::elicit_safe!(OpenIdbBackgroundChoice);
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CloseIdbRequest {

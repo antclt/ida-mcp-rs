@@ -163,7 +163,7 @@ pub static TOOL_REGISTRY: &[ToolInfo] = &[
                     The database must be opened before using any other analysis tools. \
                     Call close_idb when finished to release database locks; in multi-client servers, coordinate before closing. \
                     In HTTP/SSE mode, open_idb returns a close_token that must be provided to close_idb. \
-                    Supports timeout_secs (default 300s, max 600s) and emits MCP progress notifications when the client requests progress. \
+                    Supports timeout_secs (default 300s, max 600s). Phase transitions are observable via recent_operations. \
                     Returns metadata about the binary: file type, processor, bitness, function count, analysis_status.",
         example: r#"{"path": "/path/to/binary", "auto_analyse": false}"#,
         default: true,
@@ -376,7 +376,7 @@ pub static TOOL_REGISTRY: &[ToolInfo] = &[
                     The IDA worker thread blocks on auto_wait() either way, but in background mode \
                     the MCP request returns instead of timing out, and task_status reads the \
                     registry without going through the worker. Foreground mode (default) waits \
-                    for completion, emits progress notifications, and respects timeout_secs.",
+                    for completion, records phase transitions in recent_operations, and respects timeout_secs.",
         example: r#"{"background": true}"#,
         default: false,
         keywords: &["analyze", "functions", "analysis", "auto", "background", "task"],
@@ -919,7 +919,7 @@ pub static TOOL_REGISTRY: &[ToolInfo] = &[
                     Has full access to all ida_* modules (ida_funcs, ida_bytes, ida_segment, etc.), \
                     idc, and idautils. stdout and stderr are captured and returned. \
                     Use this for custom analysis that goes beyond the built-in tools. \
-                    Supports timeout_secs, emits foreground progress notifications when requested by the client, \
+                    Supports timeout_secs, records phase transitions in recent_operations, \
                     and requires that the IDAPython plugin is loaded (available by default in IDA Pro). \
                     API reference: https://python.docs.hex-rays.com",
         example: r#"{"code": "import idautils\nfor f in idautils.Functions():\n    print(hex(f))"}"#,
