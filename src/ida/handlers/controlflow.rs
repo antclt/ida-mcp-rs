@@ -3,8 +3,9 @@
 use crate::error::ToolError;
 use crate::ida::handlers::parse_address_str;
 use crate::ida::types::{BasicBlockInfo, FunctionInfo};
+use idalib::insn::OperandType;
 use idalib::xref::{CodeRef, XRefQuery, XRefType};
-use idalib::IDB;
+use idalib::{Address, IDB};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -60,6 +61,54 @@ pub fn handle_basic_blocks(idb: &Option<IDB>, addr: u64) -> Result<Vec<BasicBloc
     Ok(blocks)
 }
 
+fn add_callee(db: &IDB, callees: &mut Vec<FunctionInfo>, seen: &mut HashSet<u64>, target: Address) {
+    if let Some(target_func) = db.function_at(target) {
+        let callee_start = target_func.start_address();
+        if seen.insert(callee_start) {
+            callees.push(FunctionInfo {
+                address: format!("{:#x}", callee_start),
+                name: target_func
+                    .name()
+                    .unwrap_or_else(|| format!("sub_{:x}", callee_start)),
+                size: target_func.len(),
+            });
+        }
+    } else if seen.insert(target) {
+        callees.push(FunctionInfo {
+            address: format!("{:#x}", target),
+            name: db
+                .address_to_string(target)
+                .unwrap_or_else(|| format!("sub_{:x}", target)),
+            size: 0,
+        });
+    }
+}
+
+/// Returns true for operand kinds that encode a direct branch target
+/// (e.g. `call sub_xxx`). `Mem` and `Displ` also expose an `address()`
+/// but represent indirect calls (`call qword ptr [rip+...]`,
+/// `call qword ptr [reg+disp]`); their `address()` is a load site, not
+/// a callee, so we must not treat them as direct targets.
+fn is_direct_branch_operand(kind: OperandType) -> bool {
+    matches!(kind, OperandType::Near | OperandType::Far)
+}
+
+fn direct_call_target(db: &IDB, addr: Address) -> Option<Address> {
+    let insn = db.insn_at(addr)?;
+    if !insn.is_call() {
+        return None;
+    }
+
+    (0..insn.operand_count()).find_map(|idx| {
+        let op = insn.operand(idx)?;
+        if is_direct_branch_operand(op.type_()) {
+            op.address()
+        } else {
+            None
+        }
+    })
+}
+
 pub fn handle_callees(idb: &Option<IDB>, addr: u64) -> Result<Vec<FunctionInfo>, ToolError> {
     let db = idb.as_ref().ok_or(ToolError::NoDatabaseOpen)?;
 
@@ -70,43 +119,40 @@ pub fn handle_callees(idb: &Option<IDB>, addr: u64) -> Result<Vec<FunctionInfo>,
     let mut callees = Vec::new();
     let mut seen = HashSet::new();
 
-    // Iterate through the function's addresses and find call xrefs
     let start = func.start_address();
     let end = func.end_address();
     let mut current_addr = start;
 
     while current_addr < end {
+        let mut found_call_xref = false;
         if let Some(xref) = db.first_xref_from(current_addr, XRefQuery::ALL) {
             let mut xr = Some(xref);
             while let Some(x) = xr {
-                // Only follow NearCall / FarCall xrefs — skip Code(Flow) and data refs
                 let is_call = matches!(
                     x.type_(),
                     XRefType::Code(CodeRef::NearCall) | XRefType::Code(CodeRef::FarCall)
                 );
                 if is_call {
-                    let target = x.to();
-                    if let Some(target_func) = db.function_at(target) {
-                        // Deduplicate by function start address, not by xref target
-                        let callee_start = target_func.start_address();
-                        if !seen.contains(&callee_start) {
-                            seen.insert(callee_start);
-                            callees.push(FunctionInfo {
-                                address: format!("{:#x}", callee_start),
-                                name: target_func
-                                    .name()
-                                    .unwrap_or_else(|| format!("sub_{:x}", callee_start)),
-                                size: target_func.len(),
-                            });
-                        }
-                    }
+                    found_call_xref = true;
+                    add_callee(db, &mut callees, &mut seen, x.to());
                 }
                 xr = x.next_from();
             }
         }
 
-        // Move to next instruction
-        if let Some(next) = db.next_head(current_addr) {
+        if !found_call_xref {
+            if let Some(target) = direct_call_target(db, current_addr) {
+                add_callee(db, &mut callees, &mut seen, target);
+            }
+        }
+
+        if let Some(insn) = db.insn_at(current_addr) {
+            let next = current_addr.saturating_add(insn.len() as u64);
+            if next <= current_addr {
+                break;
+            }
+            current_addr = next;
+        } else if let Some(next) = db.next_head(current_addr) {
             if next <= current_addr {
                 break;
             }
@@ -326,4 +372,33 @@ pub fn handle_callgraph(
         .collect();
 
     Ok(json!({ "nodes": nodes_vec, "edges": edges_vec }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_direct_branch_operand;
+    use idalib::insn::OperandType;
+
+    #[test]
+    fn direct_branch_operands_accept_near_and_far_only() {
+        assert!(is_direct_branch_operand(OperandType::Near));
+        assert!(is_direct_branch_operand(OperandType::Far));
+    }
+
+    #[test]
+    fn indirect_call_operands_are_rejected() {
+        // Mem  -> call qword ptr [abs_addr]
+        // Displ -> call qword ptr [reg+disp] (e.g. RIP-relative on x86-64)
+        // Phrase -> call qword ptr [reg]
+        // These all have an address() but it's a load site, not a callee.
+        assert!(!is_direct_branch_operand(OperandType::Mem));
+        assert!(!is_direct_branch_operand(OperandType::Displ));
+        assert!(!is_direct_branch_operand(OperandType::Phrase));
+    }
+
+    #[test]
+    fn non_address_operands_are_rejected() {
+        assert!(!is_direct_branch_operand(OperandType::Reg));
+        assert!(!is_direct_branch_operand(OperandType::Imm));
+    }
 }
