@@ -22,7 +22,24 @@ expected_i64="$fixture.i64"
 
 cleanup() {
   if [[ -n "${server_pid:-}" ]]; then
-    kill "$server_pid" 2>/dev/null || true
+    # Close FIFO writer FD so the server sees EOF on stdin and exits.
+    exec 3>&- 2>/dev/null || true
+    # Bounded wait: poll for exit, then escalate TERM → KILL.
+    local waited=0
+    while kill -0 "$server_pid" 2>/dev/null && (( waited < 5 )); do
+      sleep 1; waited=$((waited + 1))
+    done
+    if kill -0 "$server_pid" 2>/dev/null; then
+      kill -TERM "$server_pid" 2>/dev/null || true
+      waited=0
+      while kill -0 "$server_pid" 2>/dev/null && (( waited < 5 )); do
+        sleep 1; waited=$((waited + 1))
+      done
+    fi
+    if kill -0 "$server_pid" 2>/dev/null; then
+      echo "   cleanup: server $server_pid did not exit after EOF+TERM, sending KILL" >&2
+      kill -KILL "$server_pid" 2>/dev/null || true
+    fi
     wait "$server_pid" 2>/dev/null || true
   fi
   rm -rf "$work_dir"
