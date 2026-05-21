@@ -64,6 +64,11 @@ Options:
 - `--max-workers`: maximum child worker processes for concurrent multi-IDB
   sessions; `1` keeps the legacy in-process worker
 - `--min-workers`: idle child workers to keep warm when pooled mode is enabled
+- `--worker-idle-timeout-secs`: seconds before an idle pooled worker process is
+  reaped (default 300s; 0 disables)
+- `--worker-op-timeout-secs`: per-child operation watchdog (default 1800s).
+  The parent kills a child that exceeds it; this guards against wedged
+  workers, not normal long analysis.
 - `--worker-disconnect-grace-secs`: reconnect grace before a pooled session is
   closed after the client drops its standalone SSE stream
 

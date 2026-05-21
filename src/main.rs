@@ -176,8 +176,9 @@ struct ServeHttpArgs {
     /// Seconds before an idle pooled worker is reaped (0 disables reaping).
     #[arg(long, default_value_t = 300)]
     worker_idle_timeout_secs: u64,
-    /// Per-child operation timeout in seconds; the parent kills a child that exceeds it.
-    #[arg(long, default_value_t = 600)]
+    /// Per-child operation watchdog in seconds; the parent kills a child that
+    /// exceeds it. This is a wedged-process safety net, not a UX deadline.
+    #[arg(long, default_value_t = 1800)]
     worker_op_timeout_secs: u64,
     /// Grace period before pooled sessions are closed after a client stream disconnects.
     #[arg(long, default_value_t = 2)]
