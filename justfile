@@ -140,6 +140,30 @@ test-http: build
 test-http-recovery: build
     cd test && SERVER_BIN=../target/debug/ida-mcp RUST_LOG=ida_mcp=trace just test-http-recovery
 
+# Run HTTP worker-pool concurrency test (debug)
+test-pool: build
+    cd test && SERVER_BIN=../target/debug/ida-mcp RUST_LOG=ida_mcp=trace just test-pool
+
+# Run HTTP worker-pool crash-containment test (debug)
+test-pool-crash: build
+    cd test && SERVER_BIN=../target/debug/ida-mcp RUST_LOG=ida_mcp=trace just test-pool-crash
+
+# Run HTTP worker-pool exhaustion test (debug)
+test-pool-exhaustion: build
+    cd test && SERVER_BIN=../target/debug/ida-mcp RUST_LOG=ida_mcp=trace just test-pool-exhaustion
+
+# Run HTTP worker-pool failed-second-open lease preservation test (debug)
+test-pool-second-open: build
+    cd test && SERVER_BIN=../target/debug/ida-mcp RUST_LOG=ida_mcp=trace just test-pool-second-open
+
+# Run HTTP worker-pool abandoned-client cleanup test (debug)
+test-pool-disconnect: build
+    cd test && SERVER_BIN=../target/debug/ida-mcp RUST_LOG=ida_mcp=trace just test-pool-disconnect
+
+# Run HTTP worker-pool session-manager disconnect wiring test (debug, no IDA open)
+test-pool-manager-disconnect: build
+    cd test && SERVER_BIN=../target/debug/ida-mcp RUST_LOG=ida_mcp=trace just test-pool-manager-disconnect
+
 # Run IDAPython script integration test (debug)
 test-script: build
     cd test && SERVER_BIN=../target/debug/ida-mcp RUST_LOG=ida_mcp=trace just test-script
@@ -159,6 +183,10 @@ test-elicitation: build
 # Run dyld_shared_cache integration test (requires mounted iOS DMG; default path is /tmp/ios_sys_mount/...)
 test-dsc dsc_path="": build
     cd test && SERVER_BIN=../target/debug/ida-mcp RUST_LOG=ida_mcp=trace just test-dsc {{ if dsc_path != "" { dsc_path } else { "" } }}
+
+# Verify the license-expiry preflight runs and reports a healthy license
+test-license: build
+    cd test && SERVER_BIN=../target/debug/ida-mcp RUST_LOG=ida_mcp=info just test-license
 
 # Run crash-guard integration test (triggers SIGSEGV, verifies server survives)
 test-crash-guard: build
