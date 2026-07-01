@@ -1323,21 +1323,43 @@ impl PooledSessionState {
         .await
     }
 
-    pub async fn xrefs_to(&self, addr: u64) -> Result<Vec<XRefInfo>, ToolError> {
+    pub async fn xrefs_to(
+        &self,
+        addr: u64,
+        offset: usize,
+        limit: usize,
+        timeout_secs: Option<u64>,
+    ) -> Result<XRefListResult, ToolError> {
         self.call_json(
             "xrefs_to",
-            json!({ "address": remote::hex_addr(addr) }),
-            None,
+            json!({
+                "address": remote::hex_addr(addr),
+                "offset": offset,
+                "limit": limit,
+                "timeout_secs": timeout_secs,
+            }),
+            timeout_secs,
             None,
         )
         .await
     }
 
-    pub async fn xrefs_from(&self, addr: u64) -> Result<Vec<XRefInfo>, ToolError> {
+    pub async fn xrefs_from(
+        &self,
+        addr: u64,
+        offset: usize,
+        limit: usize,
+        timeout_secs: Option<u64>,
+    ) -> Result<XRefListResult, ToolError> {
         self.call_json(
             "xrefs_from",
-            json!({ "address": remote::hex_addr(addr) }),
-            None,
+            json!({
+                "address": remote::hex_addr(addr),
+                "offset": offset,
+                "limit": limit,
+                "timeout_secs": timeout_secs,
+            }),
+            timeout_secs,
             None,
         )
         .await
